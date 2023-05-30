@@ -50,14 +50,14 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        self.flash = False # hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                         .view(1, 1, config.block_size, config.block_size))
 
-    def forward(self, x):
+    def forward(self, x, att_top_k=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -75,12 +75,17 @@ class CausalSelfAttention(nn.Module):
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
+            
+            if att_top_k is not None:
+                att_top_probs, att_top_indices = torch.topk(att[:,:,-1,:], att_top_k)
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
+        if att_top_k is not None:
+            return y, (att_top_probs, att_top_indices)
         return y
 
 class MLP(nn.Module):
@@ -107,9 +112,15 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+    def forward(self, x, att_top_k=None):
+        if att_top_k is not None:
+            att_out, (att_top_probs, att_top_indices) = self.attn(self.ln_1(x), att_top_k=att_top_k)
+        else:
+            att_out = self.attn(self.ln_1(x))
+        x = x + att_out
         x = x + self.mlp(self.ln_2(x))
+        if att_top_k is not None:
+            return x, (att_top_probs, att_top_indices)
         return x
 
 @dataclass
@@ -174,7 +185,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, att_top_k=None):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -184,8 +195,17 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
-            x = block(x)
+        
+        if att_top_k is not None:
+            att_top_probs_list = []
+            att_top_indices_list = []
+        for i, block in enumerate(self.transformer.h):
+            if att_top_k is not None:
+                x, (att_top_probs, att_top_indices) = block(x, att_top_k=att_top_k)
+                att_top_probs_list.append(att_top_probs)
+                att_top_indices_list.append(att_top_indices)
+            else:
+                x = block(x)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -197,6 +217,8 @@ class GPT(nn.Module):
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
+        if att_top_k is not None:
+            return logits, loss, (att_top_probs_list, att_top_indices_list)
         return logits, loss
 
     def crop_block_size(self, block_size):
@@ -342,17 +364,24 @@ class GPT(nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, att_top_k=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
-        for _ in range(max_new_tokens):
+        att_top_probs_list = []
+        att_top_indices_list = []
+        for iter in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
+            if iter > att_top_k:
+                logits, _, (att_top_probs, att_top_indices) = self(idx_cond, att_top_k = att_top_k)
+                att_top_probs_list.append(att_top_probs)
+                att_top_indices_list.append(att_top_indices)
+            else:
+                logits, _ = self(idx_cond)
             # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, -1, :] / temperature
             # optionally crop the logits to only the top k options
@@ -365,5 +394,6 @@ class GPT(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
-
+        if att_top_k is not None:
+            return idx, (att_top_probs_list, att_top_indices_list)
         return idx

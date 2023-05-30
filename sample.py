@@ -81,9 +81,18 @@ start_ids = encode(start)
 x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
 
 # run generation
+
+
+
+
 with torch.no_grad():
     with ctx:
-        for k in range(num_samples):
-            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
-            print(decode(y[0].tolist()))
-            print('---------------')
+        # for k in range(num_samples):
+        max_new_tokens = 2 * model.config.block_size
+        y, (att_top_probs_list, att_top_indices_list) = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k, att_top_k=model.config.block_size)
+        breakpoint()
+        torch.save((att_top_probs_list, att_top_indices_list), 'att.pt')
+                
+    
+    print(decode(y[0].tolist()))
+    print('---------------')
