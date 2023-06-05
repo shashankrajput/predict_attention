@@ -1,3 +1,6 @@
+from datasets import load_dataset
+ds=load_dataset('stas/openwebtext-10k')
+
 """
 Sample from a trained model
 """
@@ -73,12 +76,8 @@ else:
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
     decode = lambda l: enc.decode(l)
 
-# encode the beginning of the prompt
-if start.startswith('FILE:'):
-    with open(start[5:], 'r', encoding='utf-8') as f:
-        start = f.read()
-start_ids = encode(start)
-x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
+
+
 
 # run generation
 
@@ -87,12 +86,29 @@ x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
 
 with torch.no_grad():
     with ctx:
-        # for k in range(num_samples):
-        max_new_tokens = 2 * model.config.block_size
-        y, (att_top_probs_list, att_top_indices_list) = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k, att_top_k=model.config.block_size)
-        # breakpoint()
-        torch.save((att_top_probs_list, att_top_indices_list), 'att.pt')
+        att_probs_list=[]
+
+        sample_index=0
+        useful_samples=0
+        while useful_samples<num_samples and sample_index<len(ds['train']):
+            start_ids = encode(ds['train'][sample_index]['text'])
+            sample_index+=1
+
+            if len(start_ids)<model.config.block_size:
+                continue
+            useful_samples+=1
+            start_ids=start_ids[-model.config.block_size:]
+            x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
+
+            
+            max_new_tokens = 2
+            y, att_probs = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k, get_att_probs=True)
+            # breakpoint()
+            att_probs_list.append(torch.squeeze(att_probs))
+            print(useful_samples)
+        
+        torch.save(att_probs_list, 'att_openweb_small.pt')
                 
     
-    print(decode(y[0].tolist()))
-    print('---------------')
+    # print(decode(y[0].tolist()))
+    # print('---------------')
