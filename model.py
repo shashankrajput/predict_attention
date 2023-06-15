@@ -49,6 +49,13 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+
+        per_head_dim = self.n_embd // self.n_head
+        self.proj_half = torch.normal(torch.zeros(per_head_dim, per_head_dim//2), torch.ones(per_head_dim, per_head_dim//2)/math.sqrt(per_head_dim//2)).cuda()
+        self.proj_half.requires_grad = False
+        self.proj_quart = torch.normal(torch.zeros(per_head_dim, per_head_dim//4), torch.ones(per_head_dim, per_head_dim//4)/math.sqrt(per_head_dim//4)).cuda()
+        self.proj_quart.requires_grad = False
+        
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = False # hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
@@ -74,8 +81,18 @@ class CausalSelfAttention(nn.Module):
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+
+            att_half = (q @ self.proj_half @ self.proj_half.transpose(-2,-1) @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            att_half = att_half.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            
+            att_quart = (q @ self.proj_quart @ self.proj_quart.transpose(-2,-1) @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            att_quart = att_quart.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            
             if get_att_probs:
                 att_probs = att[:,:,-1,:]
+                att_half_probs = att_half[:,:,-1,:]
+                att_quart_probs = att_quart[:,:,-1,:]
+                att_probs = torch.stack([att_probs, att_half_probs, att_quart_probs], dim=-2)
             att = F.softmax(att, dim=-1)
             
             att = self.attn_dropout(att)

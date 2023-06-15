@@ -4,7 +4,10 @@ import math
 import pickle
 
 att_list = torch.load('att_openweb_small.pt')
+breakpoint()
 att = torch.stack(att_list)
+
+
 
 att_block_size = att.shape[-1]
 att_block_size_new = math.ceil(math.sqrt(att_block_size))**2
