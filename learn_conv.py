@@ -8,7 +8,7 @@ att_list = torch.load('att_openweb_small.pt')
 
 seq_len = len(att_list)
 
-window = 30
+window = 200 # conclusion: both sides saturate, left sides goes like 1/x, right side goes like 1/x^2
 
 class Conv_Model(torch.nn.Module):
     def __init__(self, att_block_size):
@@ -38,7 +38,7 @@ class Conv_Model(torch.nn.Module):
 conv_model = Conv_Model(att_list[0].shape[-1])
 optimizer = torch.optim.SGD(conv_model.parameters(), lr=0.001)
 
-sparsity=0.3
+sparsity=0.2
 
 loss_history=[]
 acc_history=[]
@@ -62,9 +62,9 @@ for epoch in range(10):
         true_thresh = torch.sigmoid(5*(true - true_thresholds))
         pred_thresh = torch.sigmoid(5*(pred - pred_thresholds))
         
+        loss = torch.mean(torch.square(torch.norm((true_thresh - pred_thresh), dim=-1))) # + torch.mean(torch.square(torch.sum(pred, dim=-1) - 1))
+        # loss = torch.mean(torch.square(torch.norm(true - pred, dim=-1)))
 
-        loss = torch.mean(torch.square(torch.norm(true_thresh - pred_thresh, dim=-1))) # + torch.mean(torch.square(torch.sum(pred, dim=-1) - 1))
-        
         _, true_top_k = torch.topk(true_thresh, k=round(sparsity*true_thresh.shape[-1]), dim=-1)
         _, pred_top_k = torch.topk(pred_thresh, k=round(sparsity*pred_thresh.shape[-1]), dim=-1)
         
@@ -73,10 +73,11 @@ for epoch in range(10):
         true_top_k = torch.zeros_like(true_thresh).scatter_(dim=-1, index=true_top_k, src=torch.ones_like(true_thresh))
         pred_top_k = torch.zeros_like(pred_thresh).scatter_(dim=-1, index=pred_top_k, src=torch.ones_like(pred_thresh))
 
-        
-        acc = torch.sum(torch.abs(pred_top_k-true_top_k), dim=-1)/2
-        acc = 1- (acc/round(sparsity*true_thresh.shape[-1]))
-        acc_history.append(torch.mean(acc).item())
+        acc = torch.mean(torch.sum(true*pred_top_k,dim=-1)/ torch.sum(true*true_top_k,dim=-1))
+        acc_history.append(acc.item())
+        # acc = torch.sum(torch.abs(pred_top_k-true_top_k), dim=-1)/2
+        # acc = 1- (acc/round(sparsity*true_thresh.shape[-1]))
+        # acc_history.append(torch.mean(acc).item())
         
         loss_history.append(loss.item())
         loss.backward()
