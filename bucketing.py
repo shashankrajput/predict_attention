@@ -47,8 +47,8 @@ for i in range(seq_len):
             if h not in results[l]:
                 results[l][h]=[]
 
-            att_probs_bucketized_norm[0, l, h, 0,:3] +=1
-            att_probs_bucketized_norm[0, l, h, 0,-3:] +=1
+            att_probs_bucketized_norm[0, l, h, 0,:1] +=1
+            att_probs_bucketized_norm[0, l, h, 0,-1:] +=1
 
             _, ind_prev = torch.topk(att_probs_bucketized_norm[0, l, h, 0], num_buckets, dim=-1)
 
