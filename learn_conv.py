@@ -14,7 +14,7 @@ seq_len = len(att_list)
 class Conv_Model(torch.nn.Module):
     def __init__(self, att_block_size, window=0):
         super(Conv_Model, self).__init__()
-        self.groups= 1200
+        self.groups= 1
         if self.groups==1:
             self.conv = torch.nn.Conv1d(in_channels=1, out_channels=1, kernel_size=2*window+1, stride=1, padding=window, bias=False).cuda()
         else:
@@ -28,11 +28,13 @@ class Conv_Model(torch.nn.Module):
 
     def forward(self, x):
         if self.groups==1:
-            return self.conv(x) + self.positional_bias
+            # return self.conv(x) + self.positional_bias
+            return self.positional_bias
         else:
             x = torch.transpose(x, 0, 1)
             
-            output = self.conv(x) + self.positional_bias
+            # output = self.conv(x) + self.positional_bias
+            output = self.positional_bias
 
             return torch.transpose(output, 0, 1)
 
@@ -52,7 +54,7 @@ conv_model = Conv_Model(att_block_size)
 
 optimizer = torch.optim.SGD(conv_model.parameters(), lr=0.1)
 
-sparsity=0.15
+sparsity=0.1
 
 loss_history=[]
 acc_history=[]
@@ -84,6 +86,7 @@ for epoch in range(10):
         true_thresh = torch.sigmoid((epoch+1)*(true - true_thresholds))
         pred_thresh = torch.sigmoid((epoch+1)*(pred - pred_thresholds))
         
+        # loss = torch.mean(torch.square(torch.norm(true*(true_thresh - pred_thresh), dim=-1))) # + torch.mean(torch.square(torch.sum(pred, dim=-1) - 1))
         # loss = torch.mean(torch.square(torch.norm((true_thresh - pred_thresh), dim=-1))) # + torch.mean(torch.square(torch.sum(pred, dim=-1) - 1))
         loss = torch.mean(torch.square(torch.norm(true - pred, dim=-1)))
 

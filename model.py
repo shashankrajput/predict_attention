@@ -51,10 +51,17 @@ class CausalSelfAttention(nn.Module):
         self.dropout = config.dropout
 
         per_head_dim = self.n_embd // self.n_head
+
         self.proj_half = torch.normal(torch.zeros(per_head_dim, per_head_dim//2), torch.ones(per_head_dim, per_head_dim//2)/math.sqrt(per_head_dim//2)).cuda()
         self.proj_half.requires_grad = False
         self.proj_quart = torch.normal(torch.zeros(per_head_dim, per_head_dim//4), torch.ones(per_head_dim, per_head_dim//4)/math.sqrt(per_head_dim//4)).cuda()
         self.proj_quart.requires_grad = False
+
+        # # https://math.stackexchange.com/a/1602779
+        # self.rot, _ = torch.linalg.qr(torch.normal(torch.zeros(per_head_dim, per_head_dim).cuda()))
+        # self.rot.requires_grad = False
+        # self.proj_half = self.rot[:,:per_head_dim//2]*torch.sqrt(2)
+        # self.proj_quart = self.rot[:,:per_head_dim//4]*2
         
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = False # hasattr(torch.nn.functional, 'scaled_dot_product_attention')
